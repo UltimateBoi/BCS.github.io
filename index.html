@@ -45,15 +45,35 @@
       return s.slice(0, -padding);
     }
 
-    // Function to derive key from password and salt
-    function getSecretKey(password, salt) {
-      const iterations = 10;
-      const keyLength = 16;
-      return crypto.pbkdf2Sync(password, salt, iterations, keyLength, 'sha1');
+    // Function to derive key from password and salt using Web Crypto API
+    async function getSecretKey(password, salt) {
+      const encoder = new TextEncoder();
+      const keyMaterial = await window.crypto.subtle.importKey(
+        'raw',
+        encoder.encode(password),
+        { name: 'PBKDF2' },
+        false,
+        ['deriveBits', 'deriveKey']
+      );
+
+      const key = await window.crypto.subtle.deriveKey(
+        {
+          name: 'PBKDF2',
+          salt: encoder.encode(salt),
+          iterations: 100000,
+          hash: 'SHA-256'
+        },
+        keyMaterial,
+        { name: 'AES-CBC', length: 128 },
+        true,
+        ['encrypt', 'decrypt']
+      );
+
+      return key;
     }
 
     // Function to decrypt .save file
-    function decryptFile() {
+    async function decryptFile() {
       const fileInput = document.getElementById('fileInput');
       const file = fileInput.files[0];
       if (!file) {
@@ -62,7 +82,7 @@
       }
 
       const reader = new FileReader();
-      reader.onload = function(event) {
+      reader.onload = async function(event) {
         const bytes = new Uint8Array(event.target.result);
         const DUMMY_HEADER_LENGTH = 44;
         const PASSWORD_INDEX_LENGTH = 8;
@@ -70,20 +90,26 @@
         const KEY_LENGTH = 16;
         const IV_LENGTH = 16;
         const PASSWORD = '21';
-        const algorithm = 'aes-128-cbc';
+        const algorithm = 'AES-CBC';
 
         const salt = bytes.slice(DUMMY_HEADER_LENGTH + PASSWORD_INDEX_LENGTH, DUMMY_HEADER_LENGTH + PASSWORD_INDEX_LENGTH + SALT_LENGTH);
         const encryptedBytes = bytes.slice(DUMMY_HEADER_LENGTH + PASSWORD_INDEX_LENGTH + SALT_LENGTH);
-        const derivedBytes = getSecretKey(PASSWORD, salt);
+        const key = await getSecretKey(PASSWORD, salt);
 
-        const iv = derivedBytes.slice(0, IV_LENGTH);
-        const key = derivedBytes.slice(IV_LENGTH, IV_LENGTH + KEY_LENGTH);
+        const iv = encryptedBytes.slice(0, IV_LENGTH);
+        const data = encryptedBytes.slice(IV_LENGTH);
 
-        const decipher = crypto.createDecipheriv(algorithm, key, iv);
-        let decrypted = decipher.update(encryptedBytes);
-        decrypted = Buffer.concat([decrypted, decipher.final()]);
+        const decipher = await window.crypto.subtle.decrypt(
+          {
+            name: algorithm,
+            iv: iv
+          },
+          key,
+          data
+        );
 
-        const json = zlib.inflateSync(decrypted).toString();
+        const decryptedText = new TextDecoder().decode(decipher);
+        const json = zlib.inflateSync(Buffer.from(decryptedText)).toString();
         const formattedJson = JSON.stringify(JSON.parse(json.trim()), null, 2);
         document.getElementById('output').textContent = formattedJson;
       };
@@ -92,7 +118,7 @@
     }
 
     // Function to re-encrypt decrypted data
-    function reEncryptFile() {
+    async function reEncryptFile() {
       const decryptedData = document.getElementById('output').textContent;
       if (!decryptedData) {
         alert('No decrypted data found.');
@@ -105,21 +131,26 @@
       const KEY_LENGTH = 16;
       const IV_LENGTH = 16;
       const PASSWORD = '21';
-      const algorithm = 'aes-128-cbc';
+      const algorithm = 'AES-CBC';
 
-      const salt = crypto.randomBytes(SALT_LENGTH);
-      const derivedBytes = getSecretKey(PASSWORD, salt);
+      const salt = crypto.getRandomValues(new Uint8Array(SALT_LENGTH));
+      const key = await getSecretKey(PASSWORD, salt);
 
-      const iv = derivedBytes.slice(0, IV_LENGTH);
-      const key = derivedBytes.slice(IV_LENGTH, IV_LENGTH + KEY_LENGTH);
+      const iv = crypto.getRandomValues(new Uint8Array(IV_LENGTH));
+      const encoder = new TextEncoder();
+      const encrypted = await window.crypto.subtle.encrypt(
+        {
+          name: algorithm,
+          iv: iv
+        },
+        key,
+        encoder.encode(pad(decryptedData))
+      );
 
-      const cipher = crypto.createCipheriv(algorithm, key, iv);
-
-      let encrypted = cipher.update(pad(decryptedData), 'utf8', 'base64');
-      encrypted += cipher.final('base64');
-
-      const encryptedBytes = Buffer.from(encrypted, 'base64');
-      const outputBytes = Buffer.concat([salt, encryptedBytes]);
+      const outputBytes = new Uint8Array(salt.length + iv.length + encrypted.byteLength);
+      outputBytes.set(salt, 0);
+      outputBytes.set(new Uint8Array(encrypted), salt.length);
+      outputBytes.set(iv, salt.length + encrypted.byteLength);
 
       const blob = new Blob([outputBytes], { type: 'application/octet-stream' });
       const url = URL.createObjectURL(blob);
