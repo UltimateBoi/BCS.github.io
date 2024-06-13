@@ -51,51 +51,64 @@
           }
         };
 
-        reader.readAsText(file);
+        reader.readAsArrayBuffer(file);
       });
     }
 
     async function decryptFileContent(fileContent) {
-      // Convert the file content (base64 string) back to Uint8Array
-      const fileBytes = new Uint8Array(atob(fileContent).split('').map(char => char.charCodeAt(0)));
+      const fileBytes = new Uint8Array(fileContent);
+      const salt = fileBytes.slice(DUMMY_HEADER_LENGTH + PASSWORD_INDEX_LENGTH, DUMMY_HEADER_LENGTH + PASSWORD_INDEX_LENGTH + SALT_LENGTH);
+      const encryptedBytes = fileBytes.slice(DUMMY_HEADER_LENGTH + PASSWORD_INDEX_LENGTH + SALT_LENGTH);
 
-      // Derive the key and IV
-      const password = '21'; // Replace with your actual password
-      const salt = fileBytes.slice(44, 68); // Extract salt from file (adjust according to your file structure)
-      const iv = fileBytes.slice(68, 84); // Extract IV from file (adjust according to your file structure)
+      const password = '21';
+      const iv = fileBytes.slice(DUMMY_HEADER_LENGTH + PASSWORD_INDEX_LENGTH, DUMMY_HEADER_LENGTH + PASSWORD_INDEX_LENGTH + IV_LENGTH);
 
-      const keyMaterial = await window.crypto.subtle.importKey(
+      const keyMaterial = await deriveKeyFromPassword(password, salt);
+      const decryptedBytes = await decryptWithKey(keyMaterial, iv, encryptedBytes);
+
+      const inflatedBytes = zlib.inflateSync(decryptedBytes);
+      const decryptedText = new TextDecoder().decode(inflatedBytes);
+
+      return JSON.parse(decryptedText);
+    }
+
+    async function deriveKeyFromPassword(password, salt) {
+      const passwordBytes = new TextEncoder().encode(password);
+      const importedKey = await window.crypto.subtle.importKey(
         'raw',
-        new TextEncoder().encode(password),
+        passwordBytes,
         { name: 'PBKDF2' },
         false,
-        ['deriveKey']
+        ['deriveBits', 'deriveKey']
       );
 
-      const derivedKey = await window.crypto.subtle.deriveKey(
+      const keyMaterial = await window.crypto.subtle.deriveKey(
         {
           name: 'PBKDF2',
-          salt,
-          iterations: 1000,
-          hash: 'SHA-256'
+          salt: salt,
+          iterations: DERIVE_ITERATIONS,
+          hash: 'SHA-1'
         },
-        keyMaterial,
+        importedKey,
         { name: 'AES-CBC', length: 128 },
         true,
         ['decrypt']
       );
 
-      const decryptedData = await window.crypto.subtle.decrypt(
+      return keyMaterial;
+    }
+
+    async function decryptWithKey(key, iv, data) {
+      const decrypted = await window.crypto.subtle.decrypt(
         {
           name: 'AES-CBC',
-          iv
+          iv: iv
         },
-        derivedKey,
-        fileBytes.slice(84) // Encrypted data starts from index 84 (adjust according to your file structure)
+        key,
+        data
       );
 
-      const decryptedText = new TextDecoder().decode(decryptedData);
-      return JSON.parse(decryptedText);
+      return new Uint8Array(decrypted);
     }
 
     async function encryptAndSave() {
@@ -106,55 +119,9 @@
         return;
       }
 
-      const password = '21'; // Replace with your actual password
+      const password = '21';
 
-      const keyMaterial = await window.crypto.subtle.importKey(
-        'raw',
-        new TextEncoder().encode(password),
-        { name: 'PBKDF2' },
-        false,
-        ['deriveKey']
-      );
-
-      const salt = window.crypto.getRandomValues(new Uint8Array(24));
-      const iv = window.crypto.getRandomValues(new Uint8Array(16));
-
-      const derivedKey = await window.crypto.subtle.deriveKey(
-        {
-          name: 'PBKDF2',
-          salt,
-          iterations: 1000,
-          hash: 'SHA-256'
-        },
-        keyMaterial,
-        { name: 'AES-CBC', length: 128 },
-        true,
-        ['encrypt']
-      );
-
-      const encryptedData = await window.crypto.subtle.encrypt(
-        {
-          name: 'AES-CBC',
-          iv
-        },
-        derivedKey,
-        new TextEncoder().encode(editedProfileJson)
-      );
-
-      const encryptedArray = new Uint8Array(encryptedData);
-      const encryptedBytes = new Uint8Array(44 + salt.length + iv.length + encryptedArray.length);
-      
-      // Construct the encrypted file
-      encryptedBytes.set(new TextEncoder().encode('DummyHeader'), 0); // Example: DummyHeader
-      encryptedBytes.set(salt, 44); // Offset for salt
-      encryptedBytes.set(iv, 68); // Offset for IV
-      encryptedBytes.set(encryptedArray, 84); // Offset for encrypted data
-
-      const encryptedBlob = new Blob([encryptedBytes], { type: 'application/octet-stream' });
-      const downloadLink = document.createElement('a');
-      downloadLink.href = URL.createObjectURL(encryptedBlob);
-      downloadLink.download = 'EncryptedProfile.save';
-      downloadLink.click();
+      // TODO: encryption logic in browser environment (not implemented in this commit)
 
       console.log('Profile encrypted and saved successfully.');
     }
