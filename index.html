@@ -8,84 +8,155 @@
 <body>
   <h1>Profile Save Editor</h1>
 
-  <textarea id="output" rows="20" cols="80" readonly></textarea><br><br>
+  <input type="file" id="fileInput" accept=".save"><br><br>
 
   <button onclick="decryptProfile()">Decrypt Profile.save</button><br><br>
+
+  <textarea id="output" rows="20" cols="80" readonly></textarea><br><br>
 
   <textarea id="editInput" rows="10" cols="80" placeholder="Edit your profile JSON here"></textarea><br><br>
 
   <button onclick="encryptAndSave()">Encrypt and Save</button>
 
   <script>
-    // Paste your decryption logic here
-    const fs = require('fs');
-    const crypto = require('crypto');
-    const zlib = require('zlib');
-
-    const DUMMY_HEADER_LENGTH = 44;
-    const PASSWORD_INDEX_LENGTH = 8;
-    const SALT_LENGTH = 24;
-    const KEY_LENGTH = 16;
-    const IV_LENGTH = 16;
-    const DERIVE_ITERATIONS = 10;
-    const PASSWORD = '21';
-    const algorithm = 'aes-128-cbc';
-
-    async function decrypt() {
-      const bytes = fs.readFileSync('./Profile.save');
-      let salt = bytes.slice(DUMMY_HEADER_LENGTH + PASSWORD_INDEX_LENGTH, DUMMY_HEADER_LENGTH + PASSWORD_INDEX_LENGTH + SALT_LENGTH);
-      let encryptedBytes = bytes.slice(DUMMY_HEADER_LENGTH + PASSWORD_INDEX_LENGTH + SALT_LENGTH, bytes.length);
-      let derivedBytes = crypto.pbkdf2Sync(PASSWORD, salt, DERIVE_ITERATIONS, KEY_LENGTH + IV_LENGTH, 'sha1');
-
-      let iv = derivedBytes.slice(0, 16);
-      let key = derivedBytes.slice(16, 32);
-
-      let decipher = crypto.createDecipheriv(algorithm, key, iv);
-      let decrypted = await decipher.update(encryptedBytes);
-      let final = decipher.final();
-      let decryptedBytes = Buffer.concat([decrypted, final]);
-
-      let json = zlib.inflateSync(decryptedBytes);
-      return JSON.parse(json.toString().trim());
-    }
-
     async function decryptProfile() {
+      const fileInput = document.getElementById('fileInput');
+      const file = fileInput.files[0];
+
+      if (!file) {
+        alert('Please select a file.');
+        return;
+      }
+
       try {
-        let profile = await decrypt();
-        document.getElementById('output').value = JSON.stringify(profile, null, 2);
-        document.getElementById('editInput').value = JSON.stringify(profile, null, 2);
+        let decryptedProfile = await readAndDecryptFile(file);
+        document.getElementById('output').value = JSON.stringify(decryptedProfile, null, 2);
+        document.getElementById('editInput').value = JSON.stringify(decryptedProfile, null, 2);
       } catch (err) {
         console.error('Error decrypting:', err);
       }
     }
 
+    async function readAndDecryptFile(file) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+
+        reader.onload = async function(event) {
+          try {
+            const fileContent = event.target.result;
+            const decryptedProfile = await decryptFileContent(fileContent);
+            resolve(decryptedProfile);
+          } catch (error) {
+            reject(error);
+          }
+        };
+
+        reader.readAsText(file);
+      });
+    }
+
+    async function decryptFileContent(fileContent) {
+      // Convert the file content (base64 string) back to Uint8Array
+      const fileBytes = new Uint8Array(atob(fileContent).split('').map(char => char.charCodeAt(0)));
+
+      // Derive the key and IV
+      const password = '21'; // Replace with your actual password
+      const salt = fileBytes.slice(44, 68); // Extract salt from file (adjust according to your file structure)
+      const iv = fileBytes.slice(68, 84); // Extract IV from file (adjust according to your file structure)
+
+      const keyMaterial = await window.crypto.subtle.importKey(
+        'raw',
+        new TextEncoder().encode(password),
+        { name: 'PBKDF2' },
+        false,
+        ['deriveKey']
+      );
+
+      const derivedKey = await window.crypto.subtle.deriveKey(
+        {
+          name: 'PBKDF2',
+          salt,
+          iterations: 1000,
+          hash: 'SHA-256'
+        },
+        keyMaterial,
+        { name: 'AES-CBC', length: 128 },
+        true,
+        ['decrypt']
+      );
+
+      const decryptedData = await window.crypto.subtle.decrypt(
+        {
+          name: 'AES-CBC',
+          iv
+        },
+        derivedKey,
+        fileBytes.slice(84) // Encrypted data starts from index 84 (adjust according to your file structure)
+      );
+
+      const decryptedText = new TextDecoder().decode(decryptedData);
+      return JSON.parse(decryptedText);
+    }
+
     async function encryptAndSave() {
       let editedProfileJson = document.getElementById('editInput').value;
-      try {
-        let editedProfile = JSON.parse(editedProfileJson);
-        let jsonBuffer = Buffer.from(JSON.stringify(editedProfile));
-        let compressedJson = zlib.deflateSync(jsonBuffer);
 
-        let salt = crypto.randomBytes(SALT_LENGTH);
-        let derivedBytes = crypto.pbkdf2Sync(PASSWORD, salt, DERIVE_ITERATIONS, KEY_LENGTH + IV_LENGTH, 'sha1');
-
-        let iv = derivedBytes.slice(0, 16);
-        let key = derivedBytes.slice(16, 32);
-
-        let cipher = crypto.createCipheriv(algorithm, key, iv);
-        let encrypted = Buffer.concat([cipher.update(compressedJson), cipher.final()]);
-
-        // Prepare the final encrypted file content
-        let header = Buffer.alloc(DUMMY_HEADER_LENGTH + PASSWORD_INDEX_LENGTH);
-        let encryptedFile = Buffer.concat([header, salt, encrypted]);
-
-        // Save to Profile.save (replace existing content)
-        fs.writeFileSync('./Profile.save', encryptedFile);
-
-        console.log('Profile encrypted and saved successfully.');
-      } catch (err) {
-        console.error('Error encrypting and saving:', err);
+      if (!editedProfileJson) {
+        alert('Please edit the profile JSON.');
+        return;
       }
+
+      const password = '21'; // Replace with your actual password
+
+      const keyMaterial = await window.crypto.subtle.importKey(
+        'raw',
+        new TextEncoder().encode(password),
+        { name: 'PBKDF2' },
+        false,
+        ['deriveKey']
+      );
+
+      const salt = window.crypto.getRandomValues(new Uint8Array(24));
+      const iv = window.crypto.getRandomValues(new Uint8Array(16));
+
+      const derivedKey = await window.crypto.subtle.deriveKey(
+        {
+          name: 'PBKDF2',
+          salt,
+          iterations: 1000,
+          hash: 'SHA-256'
+        },
+        keyMaterial,
+        { name: 'AES-CBC', length: 128 },
+        true,
+        ['encrypt']
+      );
+
+      const encryptedData = await window.crypto.subtle.encrypt(
+        {
+          name: 'AES-CBC',
+          iv
+        },
+        derivedKey,
+        new TextEncoder().encode(editedProfileJson)
+      );
+
+      const encryptedArray = new Uint8Array(encryptedData);
+      const encryptedBytes = new Uint8Array(44 + salt.length + iv.length + encryptedArray.length);
+      
+      // Construct the encrypted file
+      encryptedBytes.set(new TextEncoder().encode('DummyHeader'), 0); // Example: DummyHeader
+      encryptedBytes.set(salt, 44); // Offset for salt
+      encryptedBytes.set(iv, 68); // Offset for IV
+      encryptedBytes.set(encryptedArray, 84); // Offset for encrypted data
+
+      const encryptedBlob = new Blob([encryptedBytes], { type: 'application/octet-stream' });
+      const downloadLink = document.createElement('a');
+      downloadLink.href = URL.createObjectURL(encryptedBlob);
+      downloadLink.download = 'EncryptedProfile.save';
+      downloadLink.click();
+
+      console.log('Profile encrypted and saved successfully.');
     }
   </script>
 </body>
