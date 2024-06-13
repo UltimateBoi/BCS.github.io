@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Save File Decryptor</title>
+  <style>
+    .container {
+      max-width: 600px;
+      margin: 20px auto;
+      padding: 20px;
+      border: 1px solid #ccc;
+      border-radius: 5px;
+      box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+    }
+    button {
+      margin-top: 10px;
+    }
+    pre {
+      white-space: pre-wrap;
+      word-wrap: break-word;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Save File Decryptor</h1>
+    <input type="file" id="fileInput" accept=".save">
+    <button onclick="decryptFile()">Decrypt .save File</button>
+    <button onclick="reEncryptFile()">Re-encrypt .save File</button>
+    <pre id="output"></pre>
+  </div>
+
+  <script>
+    // Function to pad string to match AES block size
+    function pad(s) {
+      const blockSize = 16;
+      const padding = blockSize - (s.length % blockSize);
+      return s + String.fromCharCode(padding).repeat(padding);
+    }
+
+    // Function to unpad string after decryption
+    function unpad(s) {
+      const padding = s.charCodeAt(s.length - 1);
+      return s.slice(0, -padding);
+    }
+
+    // Function to derive key from password and salt
+    function getSecretKey(password, salt) {
+      const iterations = 10;
+      const keyLength = 16;
+      return crypto.pbkdf2Sync(password, salt, iterations, keyLength, 'sha1');
+    }
+
+    // Function to decrypt .save file
+    function decryptFile() {
+      const fileInput = document.getElementById('fileInput');
+      const file = fileInput.files[0];
+      if (!file) {
+        alert('Please select a file.');
+        return;
+      }
+
+      const reader = new FileReader();
+      reader.onload = function(event) {
+        const bytes = new Uint8Array(event.target.result);
+        const DUMMY_HEADER_LENGTH = 44;
+        const PASSWORD_INDEX_LENGTH = 8;
+        const SALT_LENGTH = 24;
+        const KEY_LENGTH = 16;
+        const IV_LENGTH = 16;
+        const PASSWORD = '21';
+        const algorithm = 'aes-128-cbc';
+
+        const salt = bytes.slice(DUMMY_HEADER_LENGTH + PASSWORD_INDEX_LENGTH, DUMMY_HEADER_LENGTH + PASSWORD_INDEX_LENGTH + SALT_LENGTH);
+        const encryptedBytes = bytes.slice(DUMMY_HEADER_LENGTH + PASSWORD_INDEX_LENGTH + SALT_LENGTH);
+        const derivedBytes = getSecretKey(PASSWORD, salt);
+
+        const iv = derivedBytes.slice(0, IV_LENGTH);
+        const key = derivedBytes.slice(IV_LENGTH, IV_LENGTH + KEY_LENGTH);
+
+        const decipher = crypto.createDecipheriv(algorithm, key, iv);
+        let decrypted = decipher.update(encryptedBytes);
+        decrypted = Buffer.concat([decrypted, decipher.final()]);
+
+        const json = zlib.inflateSync(decrypted).toString();
+        const formattedJson = JSON.stringify(JSON.parse(json.trim()), null, 2);
+        document.getElementById('output').textContent = formattedJson;
+      };
+
+      reader.readAsArrayBuffer(file);
+    }
+
+    // Function to re-encrypt decrypted data
+    function reEncryptFile() {
+      const decryptedData = document.getElementById('output').textContent;
+      if (!decryptedData) {
+        alert('No decrypted data found.');
+        return;
+      }
+
+      const DUMMY_HEADER_LENGTH = 44;
+      const PASSWORD_INDEX_LENGTH = 8;
+      const SALT_LENGTH = 24;
+      const KEY_LENGTH = 16;
+      const IV_LENGTH = 16;
+      const PASSWORD = '21';
+      const algorithm = 'aes-128-cbc';
+
+      const salt = crypto.randomBytes(SALT_LENGTH);
+      const derivedBytes = getSecretKey(PASSWORD, salt);
+
+      const iv = derivedBytes.slice(0, IV_LENGTH);
+      const key = derivedBytes.slice(IV_LENGTH, IV_LENGTH + KEY_LENGTH);
+
+      const cipher = crypto.createCipheriv(algorithm, key, iv);
+
+      let encrypted = cipher.update(pad(decryptedData), 'utf8', 'base64');
+      encrypted += cipher.final('base64');
+
+      const encryptedBytes = Buffer.from(encrypted, 'base64');
+      const outputBytes = Buffer.concat([salt, encryptedBytes]);
+
+      const blob = new Blob([outputBytes], { type: 'application/octet-stream' });
+      const url = URL.createObjectURL(blob);
+
+      const a = document.createElement('a');
+      a.style.display = 'none';
+      a.href = url;
+      a.download = 'Reencrypted.save';
+      document.body.appendChild(a);
+      a.click();
+      URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+    }
+  </script>
+</body>
+</html>
