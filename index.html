@@ -3,166 +3,89 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Save File Decryptor</title>
-  <style>
-    .container {
-      max-width: 600px;
-      margin: 20px auto;
-      padding: 20px;
-      border: 1px solid #ccc;
-      border-radius: 5px;
-      box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
-    }
-    button {
-      margin-top: 10px;
-    }
-    pre {
-      white-space: pre-wrap;
-      word-wrap: break-word;
-    }
-  </style>
+  <title>Profile Save Editor</title>
 </head>
 <body>
-  <div class="container">
-    <h1>Save File Decryptor</h1>
-    <input type="file" id="fileInput" accept=".save">
-    <button onclick="decryptFile()">Decrypt .save File</button>
-    <button onclick="reEncryptFile()">Re-encrypt .save File</button>
-    <pre id="output"></pre>
-  </div>
+  <h1>Profile Save Editor</h1>
+
+  <textarea id="output" rows="20" cols="80" readonly></textarea><br><br>
+
+  <button onclick="decryptProfile()">Decrypt Profile.save</button><br><br>
+
+  <textarea id="editInput" rows="10" cols="80" placeholder="Edit your profile JSON here"></textarea><br><br>
+
+  <button onclick="encryptAndSave()">Encrypt and Save</button>
 
   <script>
-    // Function to pad string to match AES block size
-    function pad(s) {
-      const blockSize = 16;
-      const padding = blockSize - (s.length % blockSize);
-      return s + String.fromCharCode(padding).repeat(padding);
+    // Paste your decryption logic here
+    const fs = require('fs');
+    const crypto = require('crypto');
+    const zlib = require('zlib');
+
+    const DUMMY_HEADER_LENGTH = 44;
+    const PASSWORD_INDEX_LENGTH = 8;
+    const SALT_LENGTH = 24;
+    const KEY_LENGTH = 16;
+    const IV_LENGTH = 16;
+    const DERIVE_ITERATIONS = 10;
+    const PASSWORD = '21';
+    const algorithm = 'aes-128-cbc';
+
+    async function decrypt() {
+      const bytes = fs.readFileSync('./Profile.save');
+      let salt = bytes.slice(DUMMY_HEADER_LENGTH + PASSWORD_INDEX_LENGTH, DUMMY_HEADER_LENGTH + PASSWORD_INDEX_LENGTH + SALT_LENGTH);
+      let encryptedBytes = bytes.slice(DUMMY_HEADER_LENGTH + PASSWORD_INDEX_LENGTH + SALT_LENGTH, bytes.length);
+      let derivedBytes = crypto.pbkdf2Sync(PASSWORD, salt, DERIVE_ITERATIONS, KEY_LENGTH + IV_LENGTH, 'sha1');
+
+      let iv = derivedBytes.slice(0, 16);
+      let key = derivedBytes.slice(16, 32);
+
+      let decipher = crypto.createDecipheriv(algorithm, key, iv);
+      let decrypted = await decipher.update(encryptedBytes);
+      let final = decipher.final();
+      let decryptedBytes = Buffer.concat([decrypted, final]);
+
+      let json = zlib.inflateSync(decryptedBytes);
+      return JSON.parse(json.toString().trim());
     }
 
-    // Function to unpad string after decryption
-    function unpad(s) {
-      const padding = s.charCodeAt(s.length - 1);
-      return s.slice(0, -padding);
-    }
-
-    // Function to derive key from password and salt using Web Crypto API
-    async function getSecretKey(password, salt) {
-      const encoder = new TextEncoder();
-      const keyMaterial = await window.crypto.subtle.importKey(
-        'raw',
-        encoder.encode(password),
-        { name: 'PBKDF2' },
-        false,
-        ['deriveBits', 'deriveKey']
-      );
-
-      const key = await window.crypto.subtle.deriveKey(
-        {
-          name: 'PBKDF2',
-          salt: encoder.encode(salt),
-          iterations: 100000,
-          hash: 'SHA-256'
-        },
-        keyMaterial,
-        { name: 'AES-CBC', length: 128 },
-        true,
-        ['encrypt', 'decrypt']
-      );
-
-      return key;
-    }
-
-    // Function to decrypt .save file
-    async function decryptFile() {
-      const fileInput = document.getElementById('fileInput');
-      const file = fileInput.files[0];
-      if (!file) {
-        alert('Please select a file.');
-        return;
+    async function decryptProfile() {
+      try {
+        let profile = await decrypt();
+        document.getElementById('output').value = JSON.stringify(profile, null, 2);
+        document.getElementById('editInput').value = JSON.stringify(profile, null, 2);
+      } catch (err) {
+        console.error('Error decrypting:', err);
       }
-
-      const reader = new FileReader();
-      reader.onload = async function(event) {
-        const bytes = new Uint8Array(event.target.result);
-        const DUMMY_HEADER_LENGTH = 44;
-        const PASSWORD_INDEX_LENGTH = 8;
-        const SALT_LENGTH = 24;
-        const KEY_LENGTH = 16;
-        const IV_LENGTH = 16;
-        const PASSWORD = '21';
-        const algorithm = 'AES-CBC';
-
-        const salt = bytes.slice(DUMMY_HEADER_LENGTH + PASSWORD_INDEX_LENGTH, DUMMY_HEADER_LENGTH + PASSWORD_INDEX_LENGTH + SALT_LENGTH);
-        const encryptedBytes = bytes.slice(DUMMY_HEADER_LENGTH + PASSWORD_INDEX_LENGTH + SALT_LENGTH);
-        const key = await getSecretKey(PASSWORD, salt);
-
-        const iv = encryptedBytes.slice(0, IV_LENGTH);
-        const data = encryptedBytes.slice(IV_LENGTH);
-
-        const decipher = await window.crypto.subtle.decrypt(
-          {
-            name: algorithm,
-            iv: iv
-          },
-          key,
-          data
-        );
-
-        const decryptedText = new TextDecoder().decode(decipher);
-        const json = zlib.inflateSync(Buffer.from(decryptedText)).toString();
-        const formattedJson = JSON.stringify(JSON.parse(json.trim()), null, 2);
-        document.getElementById('output').textContent = formattedJson;
-      };
-
-      reader.readAsArrayBuffer(file);
     }
 
-    // Function to re-encrypt decrypted data
-    async function reEncryptFile() {
-      const decryptedData = document.getElementById('output').textContent;
-      if (!decryptedData) {
-        alert('No decrypted data found.');
-        return;
+    async function encryptAndSave() {
+      let editedProfileJson = document.getElementById('editInput').value;
+      try {
+        let editedProfile = JSON.parse(editedProfileJson);
+        let jsonBuffer = Buffer.from(JSON.stringify(editedProfile));
+        let compressedJson = zlib.deflateSync(jsonBuffer);
+
+        let salt = crypto.randomBytes(SALT_LENGTH);
+        let derivedBytes = crypto.pbkdf2Sync(PASSWORD, salt, DERIVE_ITERATIONS, KEY_LENGTH + IV_LENGTH, 'sha1');
+
+        let iv = derivedBytes.slice(0, 16);
+        let key = derivedBytes.slice(16, 32);
+
+        let cipher = crypto.createCipheriv(algorithm, key, iv);
+        let encrypted = Buffer.concat([cipher.update(compressedJson), cipher.final()]);
+
+        // Prepare the final encrypted file content
+        let header = Buffer.alloc(DUMMY_HEADER_LENGTH + PASSWORD_INDEX_LENGTH);
+        let encryptedFile = Buffer.concat([header, salt, encrypted]);
+
+        // Save to Profile.save (replace existing content)
+        fs.writeFileSync('./Profile.save', encryptedFile);
+
+        console.log('Profile encrypted and saved successfully.');
+      } catch (err) {
+        console.error('Error encrypting and saving:', err);
       }
-
-      const DUMMY_HEADER_LENGTH = 44;
-      const PASSWORD_INDEX_LENGTH = 8;
-      const SALT_LENGTH = 24;
-      const KEY_LENGTH = 16;
-      const IV_LENGTH = 16;
-      const PASSWORD = '21';
-      const algorithm = 'AES-CBC';
-
-      const salt = crypto.getRandomValues(new Uint8Array(SALT_LENGTH));
-      const key = await getSecretKey(PASSWORD, salt);
-
-      const iv = crypto.getRandomValues(new Uint8Array(IV_LENGTH));
-      const encoder = new TextEncoder();
-      const encrypted = await window.crypto.subtle.encrypt(
-        {
-          name: algorithm,
-          iv: iv
-        },
-        key,
-        encoder.encode(pad(decryptedData))
-      );
-
-      const outputBytes = new Uint8Array(salt.length + iv.length + encrypted.byteLength);
-      outputBytes.set(salt, 0);
-      outputBytes.set(new Uint8Array(encrypted), salt.length);
-      outputBytes.set(iv, salt.length + encrypted.byteLength);
-
-      const blob = new Blob([outputBytes], { type: 'application/octet-stream' });
-      const url = URL.createObjectURL(blob);
-
-      const a = document.createElement('a');
-      a.style.display = 'none';
-      a.href = url;
-      a.download = 'Reencrypted.save';
-      document.body.appendChild(a);
-      a.click();
-      URL.revokeObjectURL(url);
-      document.body.removeChild(a);
     }
   </script>
 </body>
