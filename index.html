@@ -66,7 +66,26 @@
     const IV_LENGTH = 16;
     const DERIVE_ITERATIONS = 10;
     const PASSWORD = '21';
-    const algorithm = 'aes-128-cbc';
+
+    async function deriveKeyAndIv(password, salt, iterations, keyLength, ivLength) {
+      const encoder = new TextEncoder();
+      const passwordKey = encoder.encode(password);
+      const keyMaterial = await crypto.subtle.importKey('raw', passwordKey, { name: 'PBKDF2' }, false, ['deriveBits']);
+      const derivedBits = await crypto.subtle.deriveBits(
+        {
+          name: 'PBKDF2',
+          salt: salt,
+          iterations: iterations,
+          hash: 'SHA-1'
+        },
+        keyMaterial,
+        (keyLength + ivLength) * 8
+      );
+      const derivedBytes = new Uint8Array(derivedBits);
+      const key = derivedBytes.slice(0, keyLength);
+      const iv = derivedBytes.slice(keyLength, keyLength + ivLength);
+      return { key, iv };
+    }
 
     async function decrypt(file) {
       const arrayBuffer = await file.arrayBuffer();
@@ -74,26 +93,10 @@
       const salt = bytes.slice(DUMMY_HEADER_LENGTH + PASSWORD_INDEX_LENGTH, DUMMY_HEADER_LENGTH + PASSWORD_INDEX_LENGTH + SALT_LENGTH);
       const encryptedBytes = bytes.slice(DUMMY_HEADER_LENGTH + PASSWORD_INDEX_LENGTH + SALT_LENGTH, bytes.length);
 
-      const encoder = new TextEncoder();
-      const passwordKey = encoder.encode(PASSWORD);
-      const keyMaterial = await crypto.subtle.importKey('raw', passwordKey, { name: 'PBKDF2' }, false, ['deriveBits', 'deriveKey']);
-      const derivedKey = await crypto.subtle.deriveKey(
-        {
-          name: 'PBKDF2',
-          salt: salt,
-          iterations: DERIVE_ITERATIONS,
-          hash: 'SHA-1'
-        },
-        keyMaterial,
-        { name: 'AES-CBC', length: 128 },
-        true,
-        ['decrypt']
-      );
-
-      const key = new Uint8Array(await crypto.subtle.exportKey('raw', derivedKey)).slice(0, KEY_LENGTH);
-      const iv = new Uint8Array(await crypto.subtle.exportKey('raw', derivedKey)).slice(KEY_LENGTH, KEY_LENGTH + IV_LENGTH);
-
       try {
+        const { key, iv } = await deriveKeyAndIv(PASSWORD, salt, DERIVE_ITERATIONS, KEY_LENGTH, IV_LENGTH);
+
+        const derivedKey = await crypto.subtle.importKey('raw', key, { name: 'AES-CBC' }, false, ['decrypt']);
         const decrypted = await crypto.subtle.decrypt(
           { name: 'AES-CBC', iv: iv },
           derivedKey,
