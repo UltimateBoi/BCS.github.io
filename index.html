@@ -103,7 +103,7 @@
           encryptedBytes
         );
 
-        const decompressed = pako.inflate(decrypted);
+        const decompressed = pako.inflate(new Uint8Array(decrypted));
         const json = new TextDecoder().decode(decompressed);
         return JSON.stringify(JSON.parse(json.trim()), null, 2);
       } catch (error) {
