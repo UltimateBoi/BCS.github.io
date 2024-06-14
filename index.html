@@ -3,128 +3,127 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Profile Save Editor</title>
+  <title>Save File Decryptor</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background-color: #f0f0f0;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+      margin: 0;
+    }
+
+    .container {
+      text-align: center;
+      background-color: white;
+      padding: 20px;
+      border-radius: 8px;
+      box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+      max-width: 600px;
+      width: 100%;
+    }
+
+    button {
+      padding: 10px 20px;
+      background-color: #007bff;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      margin-top: 10px;
+    }
+
+    button:hover {
+      background-color: #0056b3;
+    }
+
+    pre {
+      background-color: #f8f9fa;
+      border: 1px solid #ced4da;
+      border-radius: 4px;
+      padding: 10px;
+      white-space: pre-wrap;
+      overflow-wrap: break-word;
+      max-height: 400px;
+      overflow-y: auto;
+    }
+  </style>
 </head>
 <body>
-  <h1>Profile Save Editor</h1>
-
-  <input type="file" id="fileInput" accept=".save"><br><br>
-
-  <button onclick="decryptProfile()">Decrypt Profile.save</button><br><br>
-
-  <textarea id="output" rows="20" cols="80" readonly></textarea><br><br>
-
-  <textarea id="editInput" rows="10" cols="80" placeholder="Edit your profile JSON here"></textarea><br><br>
-
-  <button onclick="encryptAndSave()">Encrypt and Save</button>
-
+  <div class="container">
+    <h1>Save File Decryptor</h1>
+    <input type="file" id="fileInput" accept=".save">
+    <button id="decryptButton">Decrypt .save File</button>
+    <pre id="output"></pre>
+  </div>
   <script>
-    async function decryptProfile() {
-      const fileInput = document.getElementById('fileInput');
-      const file = fileInput.files[0];
+    const DUMMY_HEADER_LENGTH = 44;
+    const PASSWORD_INDEX_LENGTH = 8;
+    const SALT_LENGTH = 24;
+    const KEY_LENGTH = 16;
+    const IV_LENGTH = 16;
+    const DERIVE_ITERATIONS = 10;
+    const PASSWORD = '21';
+    const algorithm = 'aes-128-cbc';
 
-      if (!file) {
-        alert('Please select a file.');
-        return;
-      }
+    async function decrypt(file) {
+      const arrayBuffer = await file.arrayBuffer();
+      const bytes = new Uint8Array(arrayBuffer);
+      const salt = bytes.slice(DUMMY_HEADER_LENGTH + PASSWORD_INDEX_LENGTH, DUMMY_HEADER_LENGTH + PASSWORD_INDEX_LENGTH + SALT_LENGTH);
+      const encryptedBytes = bytes.slice(DUMMY_HEADER_LENGTH + PASSWORD_INDEX_LENGTH + SALT_LENGTH, bytes.length);
 
-      try {
-        let decryptedProfile = await readAndDecryptFile(file);
-        document.getElementById('output').value = JSON.stringify(decryptedProfile, null, 2);
-        document.getElementById('editInput').value = JSON.stringify(decryptedProfile, null, 2);
-      } catch (err) {
-        console.error('Error decrypting:', err);
-      }
-    }
-
-    async function readAndDecryptFile(file) {
-      return new Promise((resolve, reject) => {
-        const reader = new FileReader();
-
-        reader.onload = async function(event) {
-          try {
-            const fileContent = event.target.result;
-            const decryptedProfile = await decryptFileContent(fileContent);
-            resolve(decryptedProfile);
-          } catch (error) {
-            reject(error);
-          }
-        };
-
-        reader.readAsArrayBuffer(file);
-      });
-    }
-
-    async function decryptFileContent(fileContent) {
-      const fileBytes = new Uint8Array(fileContent);
-      const salt = fileBytes.slice(DUMMY_HEADER_LENGTH + PASSWORD_INDEX_LENGTH, DUMMY_HEADER_LENGTH + PASSWORD_INDEX_LENGTH + SALT_LENGTH);
-      const encryptedBytes = fileBytes.slice(DUMMY_HEADER_LENGTH + PASSWORD_INDEX_LENGTH + SALT_LENGTH);
-
-      const password = '21';
-      const iv = fileBytes.slice(DUMMY_HEADER_LENGTH + PASSWORD_INDEX_LENGTH, DUMMY_HEADER_LENGTH + PASSWORD_INDEX_LENGTH + IV_LENGTH);
-
-      const keyMaterial = await deriveKeyFromPassword(password, salt);
-      const decryptedBytes = await decryptWithKey(keyMaterial, iv, encryptedBytes);
-
-      const inflatedBytes = zlib.inflateSync(decryptedBytes);
-      const decryptedText = new TextDecoder().decode(inflatedBytes);
-
-      return JSON.parse(decryptedText);
-    }
-
-    async function deriveKeyFromPassword(password, salt) {
-      const passwordBytes = new TextEncoder().encode(password);
-      const importedKey = await window.crypto.subtle.importKey(
-        'raw',
-        passwordBytes,
-        { name: 'PBKDF2' },
-        false,
-        ['deriveBits', 'deriveKey']
-      );
-
-      const keyMaterial = await window.crypto.subtle.deriveKey(
+      const encoder = new TextEncoder();
+      const passwordKey = encoder.encode(PASSWORD);
+      const keyMaterial = await crypto.subtle.importKey('raw', passwordKey, { name: 'PBKDF2' }, false, ['deriveBits', 'deriveKey']);
+      const derivedKey = await crypto.subtle.deriveKey(
         {
           name: 'PBKDF2',
           salt: salt,
           iterations: DERIVE_ITERATIONS,
           hash: 'SHA-1'
         },
-        importedKey,
+        keyMaterial,
         { name: 'AES-CBC', length: 128 },
         true,
         ['decrypt']
       );
 
-      return keyMaterial;
-    }
+      const key = new Uint8Array(await crypto.subtle.exportKey('raw', derivedKey)).slice(0, KEY_LENGTH);
+      const iv = new Uint8Array(await crypto.subtle.exportKey('raw', derivedKey)).slice(KEY_LENGTH, KEY_LENGTH + IV_LENGTH);
 
-    async function decryptWithKey(key, iv, data) {
-      const decrypted = await window.crypto.subtle.decrypt(
-        {
-          name: 'AES-CBC',
-          iv: iv
-        },
-        key,
-        data
-      );
+      try {
+        const decrypted = await crypto.subtle.decrypt(
+          { name: 'AES-CBC', iv: iv },
+          derivedKey,
+          encryptedBytes
+        );
 
-      return new Uint8Array(decrypted);
-    }
-
-    async function encryptAndSave() {
-      let editedProfileJson = document.getElementById('editInput').value;
-
-      if (!editedProfileJson) {
-        alert('Please edit the profile JSON.');
-        return;
+        const decompressed = pako.inflate(decrypted);
+        const json = new TextDecoder().decode(decompressed);
+        return JSON.stringify(JSON.parse(json.trim()), null, 2);
+      } catch (error) {
+        console.error('Error during decryption:', error);
+        return null;
       }
-
-      const password = '21';
-
-      // TODO: encryption logic in browser environment (not implemented in this commit)
-
-      console.log('Profile encrypted and saved successfully.');
     }
+
+    document.getElementById('decryptButton').addEventListener('click', () => {
+      const fileInput = document.getElementById('fileInput');
+      fileInput.click(); // Trigger file dialog
+    });
+
+    document.getElementById('fileInput').addEventListener('change', async (event) => {
+      const file = event.target.files[0];
+      const decryptedData = await decrypt(file);
+      if (decryptedData) {
+        document.getElementById('output').textContent = decryptedData;
+      } else {
+        document.getElementById('output').textContent = 'Error during decryption. Check console for details.';
+      }
+    });
   </script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pako/1.0.11/pako.min.js"></script>
 </body>
 </html>
